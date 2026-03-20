@@ -1,0 +1,261 @@
+openapi: 3.1.0
+
+info:
+  title: LavaEntropy API
+  version: 1.0.0
+  description: |
+    REST API for the LavaEntropy digital entropy engine.
+
+    LavaEntropy combines WebGL-based lava lamp visual chaos with OS-level
+    cryptographic randomness (`crypto.randomBytes`) and high-resolution timing
+    jitter to maintain a continuously evolving entropy pool. The pool is hashed
+    on each draw to produce unpredictable, non-repeating 256-bit random values.
+
+    **Security model**
+    - Client pixel samples are advisory — the server always mixes `crypto.randomBytes(32)`
+      before adding client data to the pool.
+    - Each `/api/random` draw reseeds the pool with the output hash, so consecutive
+      values are unlinkable even within a burst.
+    - For multi-instance deployments replace the in-memory pool with a shared Redis pool.
+  contact:
+    name: LavaEntropy
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+  - url: https://your-domain.com
+    description: Production server (replace with your domain)
+
+tags:
+  - name: Entropy
+    description: Inject pixel-sample entropy into the server-side pool.
+  - name: Random
+    description: Draw cryptographically strong random values from the pool.
+
+paths:
+  /api/entropy:
+    post:
+      operationId: injectEntropy
+      tags: [Entropy]
+      summary: Inject pixel-sample entropy
+      description: |
+        Accepts raw pixel byte values captured from the WebGL lava simulation
+        and mixes them into the server-side entropy pool.
+
+        The server **always** combines the submitted samples with a fresh
+        `crypto.randomBytes(32)` call before mixing, so a malicious client
+        cannot bias the pool unilaterally.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntropyBody'
+            examples:
+              small_sample:
+                summary: Small pixel sample
+                value:
+                  samples: [42, 128, 255, 0, 77, 190, 33, 201, 14, 99]
+              large_sample:
+                summary: Full 128×128 R-channel readback (16384 values)
+                value:
+                  samples: [183, 42, 7, 219]
+      responses:
+        '200':
+          description: Samples accepted and mixed into the entropy pool.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntropyResponse'
+              example:
+                ok: true
+        '400':
+          description: Request body is not valid JSON.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                error: Invalid JSON body
+        '422':
+          description: Body parses as JSON but fails schema validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation failed
+                details:
+                  fieldErrors:
+                    samples:
+                      - Array must contain at most 4096 element(s)
+                  formErrors: []
+        '405':
+          description: Method not allowed (only POST is accepted).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/random:
+    get:
+      operationId: getRandom
+      tags: [Random]
+      summary: Draw random value(s) from the entropy pool
+      description: |
+        Returns one or more cryptographically strong random values.
+
+        **Per-draw algorithm**
+        1. Combine `pool.get()` + `crypto.randomBytes(32)` + `process.hrtime.bigint()`.
+        2. Compute SHA-256 digest → 64-character lowercase hex string.
+        3. Reseed the pool with the output hash so the next draw diverges.
+
+        When `n > 1`, steps 1–3 are repeated independently for each value, with
+        the pool reseed applied before the next draw begins.
+      parameters:
+        - name: n
+          in: query
+          required: false
+          description: Number of independent random values to draw (1–64).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 64
+            default: 1
+          example: 5
+      responses:
+        '200':
+          description: |
+            One or more random values successfully drawn.
+            - When `n=1` (or omitted): `random` is a single hex string.
+            - When `n>1`: `random` is an array of hex strings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RandomResponse'
+              examples:
+                single:
+                  summary: Single draw (n=1 or omitted)
+                  value:
+                    random: a3f8c2d4e1b05a7f9c3d2e4f1a0b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1
+                multiple:
+                  summary: Multiple draws (n=3)
+                  value:
+                    random:
+                      - a3f8c2d4e1b05a7f9c3d2e4f1a0b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1
+                      - b91d44c8f2a37e6d05c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2
+                      - c52e83f7a1b4d9e0c3f2b1a0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0
+        '422':
+          description: Query parameter `n` is out of range or not an integer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation failed
+                details:
+                  fieldErrors:
+                    n:
+                      - Number must be less than or equal to 64
+                  formErrors: []
+        '405':
+          description: Method not allowed (only GET is accepted).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+components:
+  schemas:
+
+    EntropyBody:
+      type: object
+      required: [samples]
+      properties:
+        samples:
+          type: array
+          description: |
+            Raw pixel byte values (0–255) captured from the WebGL lava render
+            target. Typically the R-channel of a 128×128 readback (16 384 values),
+            but any non-empty slice up to 4096 values is accepted.
+          items:
+            type: integer
+            minimum: 0
+            maximum: 255
+          minItems: 1
+          maxItems: 4096
+          example: [42, 128, 255, 0, 77, 190, 33, 201, 14, 99]
+
+    EntropyResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+          description: Always `true` on success.
+          example: true
+
+    RandomResponse:
+      type: object
+      required: [random]
+      description: |
+        On a single draw (`n=1`), `random` is a string.
+        On multiple draws (`n>1`), `random` is an array of strings.
+      properties:
+        random:
+          oneOf:
+            - type: string
+              pattern: '^[0-9a-f]{64}$'
+              description: SHA-256 hex digest (64 lowercase hex characters = 256 bits).
+              example: a3f8c2d4e1b05a7f9c3d2e4f1a0b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1
+            - type: array
+              items:
+                type: string
+                pattern: '^[0-9a-f]{64}$'
+              minItems: 2
+              maxItems: 64
+              description: Array of SHA-256 hex digests, one per draw.
+              example:
+                - a3f8c2d4e1b05a7f9c3d2e4f1a0b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1
+                - b91d44c8f2a37e6d05c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2
+
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+          example: Invalid JSON body
+
+    ValidationError:
+      type: object
+      required: [error, details]
+      properties:
+        error:
+          type: string
+          enum: [Validation failed]
+          example: Validation failed
+        details:
+          type: object
+          description: Zod flattened error structure.
+          properties:
+            fieldErrors:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+              description: Per-field validation messages.
+              example:
+                samples:
+                  - Array must contain at most 4096 element(s)
+            formErrors:
+              type: array
+              items:
+                type: string
+              description: Top-level (non-field) validation messages.
+              example: []

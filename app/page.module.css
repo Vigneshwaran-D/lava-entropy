@@ -1,0 +1,56 @@
+.page {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+}
+
+.canvasWrap {
+    position: relative;
+    flex: 1;
+    height: 100%;
+}
+
+.canvas {
+    position: absolute;
+    inset: 0;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 24px;
+    pointer-events: none;
+}
+
+.overlay > * {
+    pointer-events: auto;
+}
+
+.title {
+    font-size: clamp(2.5rem, 6vw, 5rem);
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    color: #fff;
+    text-shadow:
+        0 0 40px rgba(255, 100, 0, 0.9),
+        0 0 80px rgba(255, 60, 0, 0.6),
+        0 2px 4px rgba(0, 0, 0, 0.8);
+    user-select: none;
+}
+
+.subtitle {
+    font-size: clamp(0.85rem, 1.8vw, 1.1rem);
+    color: rgba(255, 220, 180, 0.9);
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+    text-align: center;
+    max-width: 480px;
+    user-select: none;
+}
